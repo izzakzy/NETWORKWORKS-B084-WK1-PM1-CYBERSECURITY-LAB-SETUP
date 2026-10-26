@@ -88,6 +88,18 @@ These checks help determine whether the virtual machine has an IP address, a rou
 
 This lab is intended for educational purposes and authorized security testing only. Always obtain permission before testing systems or networks.
 
+## 📚 Resources
+
+- [Kali Linux Documentation](https://www.kali.org/docs/) — Installation and usage guides.
+- [Oracle VirtualBox Documentation](https://www.virtualbox.org/wiki/Documentation) — Virtual machine and network configuration.
+- [Arch Linux Wiki](https://wiki.archlinux.org/) — Host system configuration and troubleshooting.
+- [Git Documentation](https://git-scm.com/doc) — Version control and repository management.
+
+## 👤 Author
+
+**Izak**  
+GitHub: [@izzakzy](https://github.com/izzakzy)
+
 ## 👤 Author
 
 **izak**
