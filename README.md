@@ -17,244 +17,250 @@
 
 ## Overview
 
-This project documents the setup of a cybersecurity lab using Oracle VirtualBox on an Arch Linux host, with Kali Linux as the guest operating system.
+This project documents a cybersecurity testing lab built with Oracle VirtualBox on an **Arch Linux** host, with Kali Linux as the attacking machine. The lab uses a VirtualBox **NAT Network** named `NAT` in the subnet `10.0.0.0/24`. Kali has the static IP `10.0.0.2/24` and full internet access, and the NAT Network keeps the lab separate from the physical network.
 
-The lab uses a VirtualBox NAT Network named `nat` to provide network connectivity for the Kali Linux virtual machine while keeping the lab environment separate from a direct bridged connection to the physical network.
+The guide below is written so another Arch Linux user can repeat the setup from scratch.
 
 ## Objectives
 
-- Install and configure VirtualBox on Arch Linux.
-- Configure a VirtualBox NAT Network named `nat`.
-- Set up a Kali Linux virtual machine.
-- Configure the virtual machine to use the `nat` network.
-- Verify network connectivity from Kali Linux.
-- Document the setup process and troubleshooting steps.
+- Install VirtualBox and 7-Zip on Arch Linux.
+- Create a NAT Network in `10.0.0.0/24`.
+- Import Kali Linux as the attacking machine.
+- Enable clipboard sharing and drag and drop.
+- Share the host `Downloads` folder with the VM.
+- Set the Kali IP address to `10.0.0.2/24`.
+- Verify gateway, internet and DNS connectivity.
+- Take a clean snapshot of the VM.
 
 ## Lab Environment
 
 | Component | Configuration |
 |---|---|
-| Host device | Lenovo ThinkPad T14s |
-| Host operating system | Arch Linux |
-| Processor | AMD Ryzen 5 PRO |
-| Memory | 8 GB RAM |
-| Virtualization software | Oracle VirtualBox |
-| Guest operating system | Kali Linux |
+| Host | Lenovo ThinkPad T14s, AMD Ryzen 5 PRO, 8 GB RAM |
+| Host OS | Arch Linux (standard `linux` kernel) |
+| Hypervisor | Oracle VirtualBox 7.2.22 with DKMS host modules |
+| Guest OS | Kali Linux 2026.2 |
+| VM name | `kali-linux-2026.2-virtualbox-amd64` |
+| VM resources | 3072 MB RAM, 2 CPUs |
 | Network mode | NAT Network |
-| NAT Network name | `nat` |
-| Example network subnet | `10.0.0.0/24` |
+| NAT Network name | `NAT` |
+| Network address | `10.0.0.0/24` |
+| DHCP on the NAT Network | Disabled (static IPs are used) |
+| Gateway | `10.0.0.1` |
+| Kali IP address | `10.0.0.2/24` |
+| DNS servers | `1.1.1.1`, `8.8.8.8` |
+| Clipboard / drag and drop | Bidirectional |
+| Shared folder | Host `~/Downloads` → Kali `/media/sf_downloads` |
 
-*Note: The subnet is an example. Use a subnet that does not conflict with your local network, VPN, or other virtual networks.*
+## Lab Architecture
 
-## 1. Install VirtualBox on Arch Linux
+```
+Arch Linux host (VirtualBox 7.2.22)
+   │
+   └── NAT Network "NAT"  (10.0.0.0/24, gateway 10.0.0.1, DHCP off)
+          │
+          └── Kali Linux  10.0.0.2/24 ──► internet (via NAT)
 
-Update the system packages:
+Shared folder:  host ~/Downloads  ◄──►  Kali /media/sf_downloads
+```
+
+Future target machines (Windows and Android VMs) can join the same NAT Network with their own static addresses.
+
+---
+
+## Setup Procedure
+
+Run all host commands as your normal user. Use `sudo` only where shown, and never run VirtualBox itself as root.
+
+### Step 1. Check the host network
+
+The lab subnet must not overlap with the host's own network.
 
 ```bash
+ip -4 -br a
+```
+
+If your Wi-Fi or Ethernet address starts with `10.0.0.`, the lab network would conflict with it. Addresses such as `192.168.x.x` are fine. The libvirt/QEMU bridge (`virbr0`, normally `192.168.122.0/24`) does not conflict.
+
+### Step 2. Install VirtualBox and 7-Zip
+
+Update the system and install the packages. VirtualBox needs kernel modules that match the running kernel, so the DKMS package is used together with the kernel headers.
+
+```bash
+uname -r                                   # note which kernel you run
 sudo pacman -Syu
+sudo pacman -S virtualbox virtualbox-host-dkms linux-headers p7zip xorg-xwayland
+sudo usermod -aG vboxusers $USER
+sudo reboot
 ```
 
-Install VirtualBox and its DKMS host modules:
+`linux-headers` is for the standard Arch kernel. For other kernels, install the matching headers instead, such as `linux-lts-headers` or `linux-zen-headers`. `xorg-xwayland` is needed to run VirtualBox on a Wayland desktop.
+
+After the reboot, verify the installation:
 
 ```bash
-sudo pacman -S virtualbox virtualbox-host-dkms
-```
-
-Install the kernel headers matching your installed kernel. For example:
-
-```bash
-sudo pacman -S linux-headers
-```
-
-For other kernels, install the corresponding headers, such as `linux-lts-headers` or `linux-zen-headers`.
-
-Load the VirtualBox kernel module:
-
-```bash
+uname -r && pacman -Q linux-headers     # versions should match
+dkms status                             # vboxhost should show as installed
 sudo modprobe vboxdrv
-```
-
-Verify the installation:
-
-```bash
 VBoxManage --version
 ```
 
-If the module fails to load, check that the installed kernel headers match the running kernel and consult the ArchWiki VirtualBox guide.
-
-## 2. Configure the VirtualBox NAT Network
-
-The NAT Network will be named `nat`.
-
-### Check existing NAT Networks
+**Existing QEMU/KVM setup.** VirtualBox can be installed next to QEMU/KVM, and nothing needs to be removed. Do not run a QEMU/KVM VM and a VirtualBox VM at the same time. If VirtualBox refuses to start a VM because of a VT-x/AMD-V conflict with all QEMU VMs shut down, unload the KVM module temporarily:
 
 ```bash
-VBoxManage list natnets
+sudo modprobe -r kvm_amd      # kvm_intel on Intel CPUs
 ```
 
-### Create the NAT Network
+### Step 3. Create the NAT Network
 
-If a network named `nat` does not already exist, create it with an example subnet and DHCP enabled:
+VirtualBox has no NAT Network by default, so create one named `NAT` with DHCP disabled:
 
 ```bash
-VBoxManage natnetwork add \
-  --netname "nat" \
-  --network "10.0.0.0/24" \
-  --enable \
-  --dhcp on
+VBoxManage natnetwork add --netname NAT --network "10.0.0.0/24" --enable --dhcp off
+VBoxManage list natnetworks
 ```
 
-### Start the NAT Network
+Expected output:
+
+```
+Name:         NAT
+Network:      10.0.0.0/24
+Gateway:      10.0.0.1
+DHCP Server:  No
+```
+
+In the GUI, the same network is under **File → Tools → Network Manager → NAT Networks**. A NAT Network is used instead of plain NAT so that several VMs on the same network can reach each other as well as the internet.
+
+### Step 4. Download and import Kali Linux
+
+1. Download the **VirtualBox 64-bit** image from the Virtual Machines tab at <https://kali.org/get-kali>. About 20 GB of free space is needed in `/home`, because VMs are stored in the user's home folder.
+2. Extract it from the folder where it was saved:
+
+   ```bash
+   cd ~/Downloads
+   7z x kali-linux-2026.2-virtualbox-amd64.7z
+   ```
+
+3. Start `VirtualBox`, choose **Machine → Add**, and select the extracted `.vbox` file.
+
+The default Kali login is `kali` / `kali`.
+
+### Step 5. Configure the virtual machine
+
+With the VM powered off, open **Settings** and set the following. If **NAT Network** is missing from the *Attached to* list, switch VirtualBox to **Expert Mode** and make sure the network from Step 3 exists.
+
+| Section | Setting |
+|---|---|
+| Network → Adapter 1 | Attached to **NAT Network**, Name `NAT` |
+| General → Advanced | Shared Clipboard **Bidirectional**, Drag'n'Drop **Bidirectional** |
+| System | Base Memory 3072 MB, Processors 2 |
+| Shared Folders | Folder Path `/home/<user>/Downloads`, Folder Name `downloads`, **Auto-mount** and **Make Permanent** enabled |
+
+The same settings from the terminal:
 
 ```bash
-VBoxManage natnetwork start --netname "nat"
+VM="kali-linux-2026.2-virtualbox-amd64"
+VBoxManage modifyvm "$VM" --nic1 natnetwork --nat-network1 NAT
+VBoxManage modifyvm "$VM" --clipboard-mode bidirectional --draganddrop bidirectional
+VBoxManage modifyvm "$VM" --memory 3072 --cpus 2
+VBoxManage sharedfolder add "$VM" --name downloads --hostpath "$HOME/Downloads" --automount
 ```
 
-### Verify the configuration
+Check the saved configuration:
 
 ```bash
-VBoxManage list natnets
+VBoxManage showvminfo "$VM" --machinereadable | grep -iE "^nic1|^nat-network1|sharedfolder"
 ```
 
-Confirm that the network named `nat` is listed and enabled.
+Only the host `Downloads` folder is shared, not the whole home folder.
 
-If `nat` already exists, do not create a duplicate. Enable and configure the existing network instead:
+### Step 6. Set the static IP address in Kali
+
+Start the VM, log in, and run in a Kali terminal:
 
 ```bash
-VBoxManage natnetwork modify \
-  --netname "nat" \
-  --enable \
-  --dhcp on
+nmcli con show                       # note the wired connection name
+
+sudo nmcli con mod "Wired connection 1" \
+  ipv4.method manual \
+  ipv4.addresses 10.0.0.2/24 \
+  ipv4.gateway 10.0.0.1 \
+  ipv4.dns "1.1.1.1 8.8.8.8"
+
+sudo nmcli con up "Wired connection 1"
+sudo usermod -aG vboxsf kali         # allows access to the shared folder
 ```
 
-Then start it if it is not already running:
+The connection name may differ between systems, so use the name shown by `nmcli con show`. Log out and back in after the `usermod` command.
+
+### Step 7. Verify the lab
+
+Run these in Kali:
+
+| Test | Command | Expected result |
+|---|---|---|
+| IP address | `ip a` | `eth0` has `10.0.0.2/24` |
+| Default route | `ip route` | Default route via `10.0.0.1` |
+| Gateway | `ping -c 3 10.0.0.1` | Replies received |
+| Internet | `ping -c 3 8.8.8.8` | Replies received |
+| DNS | `ping -c 3 google.com` | Name resolves, replies received |
+| Shared folder | `ls /media/sf_downloads` | Host Downloads content listed |
+
+Observed results:
+
+```
+eth0: inet 10.0.0.2/24
+default via 10.0.0.1 dev eth0 proto static
+PING google.com (142.250.198.174) ... replies received
+```
+
+An occasional `(DUP!)` line in ping output is a known quirk of the VirtualBox NAT Network and is harmless. Clipboard sharing can be tested by copying text between the host and Kali.
+
+### Step 8. Take a snapshot
+
+After all tests pass, take a clean snapshot in VirtualBox (**Machine → Take Snapshot**), or from the terminal:
 
 ```bash
-VBoxManage natnetwork start --netname "nat"
+VBoxManage snapshot "kali-linux-2026.2-virtualbox-amd64" take "clean-lab-setup"
+VBoxManage snapshot "kali-linux-2026.2-virtualbox-amd64" list
 ```
 
-## 3. Configure the Kali Linux Virtual Machine
+The snapshot is the clean baseline of the lab. If a future exercise breaks the VM, it can be restored to this point.
 
-In the VirtualBox graphical interface:
+---
 
-1. Select the Kali Linux virtual machine.
-2. Open **Settings**.
-3. Select **Network**.
-4. Open **Adapter 1**.
-5. Enable the network adapter.
-6. Set **Attached to** to **NAT Network**.
-7. Select `nat` as the network name.
-8. Save the changes.
+## Problems Encountered and Solutions
 
-Start the Kali Linux virtual machine.
+| Problem | Solution |
+|---|---|
+| `error: target not found: virtualbox-host-modules-arch` | The prebuilt module package is no longer available under that name. Use `virtualbox-host-dkms` with `linux-headers` and confirm with `dkms status` |
+| **NAT Network** missing from the adapter dropdown | The network had not been created and VirtualBox was in Basic Mode. Create it with `VBoxManage natnetwork add` and switch to Expert Mode |
+| Kali gets a `10.0.2.x` address | Plain *NAT* mode was selected. Use **NAT Network** with the name `NAT` |
+| `dkms status` is empty or shows an error | The headers do not match the running kernel. Install the matching headers, reboot, and run `sudo dkms autoinstall` |
+| VM will not start (VT-x / AMD-V error) | Enable virtualization (SVM / VT-x) in the BIOS, and shut down any QEMU/KVM VMs. If needed, run `sudo modprobe -r kvm_amd` |
+| Gateway pings work but `google.com` fails | DNS problem. Re-check `ipv4.dns` and run `sudo nmcli con up` again |
+| Shared folder is empty or access is denied | Run `sudo usermod -aG vboxsf kali`, then log out and back in |
+| Drag and drop does not work | Known limitation on Wayland hosts (VirtualBox runs through XWayland). The setting is enabled, and the shared folder is used for file transfer |
 
-## 4. Verify Network Connectivity in Kali Linux
+---
 
-Open a terminal in Kali Linux.
+## What I Learned
 
-### Check the network interfaces
+- **NAT vs NAT Network:** plain NAT isolates each VM, while a NAT Network lets VMs on the same virtual network reach each other and the internet.
+- **Static addressing:** configuring IP, gateway and DNS with NetworkManager, and why DHCP is off on this network.
+- **Kernel modules on Arch:** VirtualBox needs modules matching the running kernel, which DKMS and the kernel headers provide.
+- **VM integration:** shared folders, clipboard sharing and the `vboxsf` group connect the guest to the host.
+- **Snapshots and documentation:** a clean snapshot gives a safe recovery point, and documenting problems makes the lab repeatable.
 
-```bash
-ip addr
-```
+## Security and Ethical Use
 
-Confirm that the active interface has an IP address assigned by DHCP.
+This laboratory is intended strictly for education. Use Kali Linux and other security-testing tools only on systems and networks you own or have explicit permission to test. Keep experimental activity inside the isolated lab.
 
-### Check the routing table
+## Tools and Resources
 
-```bash
-ip route
-```
-
-Confirm that an appropriate default route is present.
-
-### Test external IP connectivity
-
-```bash
-ping -c 4 1.1.1.1
-```
-
-### Test DNS resolution
-
-```bash
-ping -c 4 google.com
-```
-
-Successful responses indicate that IP connectivity and DNS resolution are working. If one test fails, investigate the relevant network configuration before assuming the entire network is unavailable.
-
-## 5. Screenshots
-
-The following screenshots document the lab setup. Keep these image files in the repository alongside this README.
-
-### Screenshot 1 — Lab Setup Title
-
-![Lab setup title](1-screenshot-title-image.png)
-
-### Screenshot 2 — VirtualBox Network Settings
-
-![VirtualBox network settings](2-screenshot-network-settings-1.png)
-
-### Screenshot 3 — Kali Linux Virtual Machine
-
-![Kali Linux virtual machine](3-screenshot-kali-linux.png)
-
-### Screenshot 4 — Kali Linux Network Settings
-
-![Kali Linux network settings](4-screenshot-kali-network-settings.png)
-
-## 6. Troubleshooting
-
-### VirtualBox kernel module fails to load
-
-Check the running kernel:
-
-```bash
-uname -r
-```
-
-Ensure the matching kernel headers are installed, then review the ArchWiki instructions for your kernel and VirtualBox package configuration.
-
-### NAT Network `nat` is not listed
-
-```bash
-VBoxManage list natnets
-```
-
-If it does not exist, create it using the commands in Section 2.
-
-### Kali Linux does not receive an IP address
-
-- Confirm that Adapter 1 is enabled.
-- Confirm that **Attached to** is set to **NAT Network**.
-- Confirm that the selected network is `nat`.
-- Check that DHCP is enabled for the NAT Network.
-- Restart the NAT Network and Kali VM if necessary.
-
-### IP connectivity works, but domain names do not resolve
-
-Test an IP address and a domain name separately. If IP connectivity works but DNS resolution fails, investigate the guest's DNS configuration and VirtualBox network settings.
-
-### Network subnet conflicts
-
-The example subnet `10.0.0.0/24` may not be suitable for every environment. Choose a non-conflicting subnet if it overlaps with your local network, VPN, or another virtual network.
-
-## 7. Learning Outcomes
-
-This lab provides practical experience with:
-
-- Installing virtualization software on Arch Linux.
-- Understanding VirtualBox NAT Network configuration.
-- Connecting a Kali Linux guest to a virtual network.
-- Checking IP addressing, routes, and DNS resolution.
-- Troubleshooting basic virtual machine networking.
-- Documenting a repeatable cybersecurity lab environment.
-
-## Security Note
-
-Use Kali Linux and other security-testing tools only on systems and networks you own or have explicit permission to test. Keep experimental activities within an authorized lab environment.
-
-## References
-
+- **7-Zip:** <https://7-zip.org/download.html>
+- **VirtualBox:** <https://virtualbox.org/wiki/Downloads>
+- **Kali Linux:** <https://kali.org/get-kali>
 - [ArchWiki — VirtualBox](https://wiki.archlinux.org/title/VirtualBox)
 - [Oracle VirtualBox User Manual — Networking](https://docs.oracle.com/en/virtualization/virtualbox/7.2/user/networkingdetails.html)
 - [Kali Linux Documentation](https://www.kali.org/docs/)
